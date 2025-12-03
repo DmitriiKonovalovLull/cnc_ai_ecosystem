@@ -1,0 +1,35 @@
+# Перейди в корень проекта
+cd C:\Users\theka\Pycharm\cnc_ai_ecosystem
+
+# Создаем .env файл с минимальными настройками
+@'
+# === Настройки приложения ===
+DEBUG=True
+ENVIRONMENT=development
+LOG_LEVEL=INFO
+
+# === База данных ===
+# Для SQLite (проще для начала - не требует установки PostgreSQL):
+DATABASE_URL=sqlite:///./cnc_ai.db
+
+# ИЛИ для PostgreSQL (раскомментировать если есть PostgreSQL):
+# DATABASE_URL=postgresql+asyncpg://cnc_user:cnc_password@localhost:5432/cnc_ecosystem
+
+# === Redis (опционально) ===
+# REDIS_URL=redis://localhost:6379/0
+
+# === Безопасность ===
+JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production-12345
+
+# === AI API Keys (опционально) ===
+# OPENAI_API_KEY=sk-your-openai-key-here
+# SANDVIK_API_KEY=your_sandvik_key_here
+# ISCAR_API_KEY=your_iscar_key_here
+
+# === Vector Database (опционально) ===
+# QDRANT_URL=http://localhost:6333
+# QDRANT_API_KEY=your_qdrant_key
+'@ | Out-File -FilePath .env -Encoding UTF8
+
+# Проверяем что файл создался
+Get-Content .env

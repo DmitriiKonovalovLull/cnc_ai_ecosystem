@@ -1,0 +1,129 @@
+version: "1.0"
+last_updated: "2024-01-01"
+
+sources:
+  gost_standards:
+    - name: "docs.cntd.ru"
+      url: "https://docs.cntd.ru"
+      type: "web"
+      parser: "gost"
+      priority: 10
+      rate_limit_delay: 3.0
+      selectors:
+        title: "h1.document-title"
+        content: ".document-content"
+        tables: ".table"
+
+    - name: "files.stroyinf.ru"
+      url: "https://files.stroyinf.ru"
+      type: "web"
+      parser: "gost"
+      priority: 9
+
+  international_standards:
+    - name: "ISO"
+      url: "https://www.iso.org"
+      type: "api"
+      parser: "iso"
+      api_key_env: "ISO_API_KEY"
+
+    - name: "DIN"
+      url: "https://www.din.de"
+      type: "web"
+      parser: "din"
+
+  tool_manufacturers:
+    - name: "Sandvik Coromant"
+      url: "https://www.sandvik.coromant.com"
+      type: "api"
+      parser: "tool_data"
+      api_key_env: "SANDVIK_API_KEY"
+      endpoints:
+        tools: "/api/v1/tools"
+        inserts: "/api/v1/inserts"
+        parameters: "/api/v1/cutting-data"
+
+    - name: "ISCAR"
+      url: "https://www.iscar.com"
+      type: "api"
+      parser: "tool_data"
+      api_key_env: "ISCAR_API_KEY"
+
+  machine_tools:
+    - name: "DMG MORI"
+      url: "https://www.dmgmori.com"
+      type: "web"
+      parser: "machine"
+
+    - name: "Haas Automation"
+      url: "https://www.haascnc.com"
+      type: "web"
+      parser: "machine"
+
+  forums_communities:
+    - name: "Practical Machinist"
+      url: "https://www.practicalmachinist.com"
+      type: "forum"
+      parser: "forum"
+      login_required: false
+
+    - name: "CNCzone"
+      url: "https://www.cnczone.com"
+      type: "forum"
+      parser: "forum"
+
+    - name: "CNCClub.ru"
+      url: "https://cncclub.ru"
+      type: "forum"
+      parser: "forum"
+      language: "ru"
+
+  educational:
+    - name: "CNC Cookbook"
+      url: "https://www.cnccookbook.com"
+      type: "blog"
+      parser: "article"
+
+    - name: "Engineering.com"
+      url: "https://www.engineering.com"
+      type: "blog"
+      parser: "article"
+
+parsers:
+  gost:
+    extractors:
+      - type: "title"
+        selector: "h1"
+      - type: "content"
+        selector: ".content"
+      - type: "tables"
+        selector: "table"
+      - type: "gost_codes"
+        regex: "ГОСТ\\s+[\\d\\-\\.]+"
+
+  tool_data:
+    extractors:
+      - type: "json"
+        path: "$.data[*]"
+      - type: "csv"
+        delimiter: ","
+
+  forum:
+    extractors:
+      - type: "threads"
+        selector: ".thread"
+      - type: "posts"
+        selector: ".post-content"
+      - type: "users"
+        selector: ".username"
+
+rate_limits:
+  default:
+    requests_per_minute: 60
+    burst_size: 10
+  strict:
+    requests_per_minute: 30
+    burst_size: 5
+  aggressive:
+    requests_per_minute: 120
+    burst_size: 20
