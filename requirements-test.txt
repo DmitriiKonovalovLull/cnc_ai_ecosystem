@@ -1,0 +1,4 @@
+# Unit tests use local doubles for Transformers and application settings.
+numpy>=1.24,<3
+torch>=2.1,<3
+joblib>=1.3,<2

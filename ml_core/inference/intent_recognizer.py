@@ -3,14 +3,18 @@ import numpy as np
 from typing import Dict, List, Any, Tuple
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import joblib
+import json
 from pathlib import Path
 
 from config.settings import settings
+from ml_core.label_mapping import resolve_intent_label
 
 
 class IntentRecognizer:
     def __init__(self, model_path: str = None):
-        self.model_path = model_path or settings.INTENT_MODEL
+        models_root = Path(__file__).parent.parent / 'models'
+        trained_model_path = models_root / 'intent_classifier' / 'final_model'
+        self.model_path = str(model_path or (trained_model_path if trained_model_path.exists() else settings.INTENT_MODEL))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Intent categories for CNC domain
@@ -41,45 +45,69 @@ class IntentRecognizer:
             'general_info': ['что такое', 'как работает', 'объясните', 'информация']
         }
 
+        self.model = None
+        self.tokenizer = None
+        self.ml_pipeline = None
+        self.id_to_label = {}
+        self.ml_id_to_label = {}
         self._load_models()
 
     def _load_models(self):
         """Load ML models"""
+        model_dir = Path(self.model_path)
+        mapping_path = model_dir / 'label_mappings.json'
         try:
-            # Load transformer model
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             self.model = AutoModelForSequenceClassification.from_pretrained(
-                self.model_path,
-                num_labels=len(self.intent_categories)
+                self.model_path
             ).to(self.device)
-
-            # Load traditional ML model as fallback
-            self.tfidf_vectorizer = self._load_or_create('tfidf_vectorizer.pkl')
-            self.svm_classifier = self._load_or_create('svm_classifier.pkl')
-
-            print(f"Intent recognizer loaded successfully on {self.device}")
-
+            self.model.eval()
         except Exception as e:
-            print(f"Error loading models: {e}")
-            # Fallback to rule-based
+            print(f"Transformer model unavailable: {e}")
             self.model = None
             self.tokenizer = None
 
-    def _load_or_create(self, filename: str):
-        """Load model or create default"""
-        model_path = Path(__file__).parent / 'models' / 'intent_classifier' / filename
+        if mapping_path.is_file():
+            try:
+                self.id_to_label = self._read_label_mapping(mapping_path)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
+                print(f"Transformer label mapping unavailable: {e}")
+                self.model = None
+                self.tokenizer = None
+        elif self.model is not None:
+            self.id_to_label = {
+                str(class_id): label
+                for class_id, label in getattr(self.model.config, 'id2label', {}).items()
+                if label in self.intent_categories
+            }
 
-        if model_path.exists():
-            return joblib.load(model_path)
-        else:
-            # Create default model
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.svm import LinearSVC
+        if self.model is not None and not self.id_to_label:
+            # A base model's default LABEL_0 mapping is not a trustworthy intent map.
+            self.model = None
+            self.tokenizer = None
 
-            if 'vectorizer' in filename:
-                return TfidfVectorizer(max_features=1000)
-            else:
-                return LinearSVC()
+        ml_model_dir = (
+            model_dir.parent / 'ml_model' if model_dir.is_dir()
+            else Path(__file__).parent.parent / 'models' / 'intent_classifier' / 'ml_model'
+        )
+        ml_model_path = ml_model_dir / 'ml_model.pkl'
+        ml_mapping_path = ml_model_dir / 'label_mappings.json'
+        try:
+            if ml_model_path.is_file() and ml_mapping_path.is_file():
+                self.ml_pipeline = joblib.load(ml_model_path)
+                self.ml_id_to_label = self._read_label_mapping(ml_mapping_path)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
+            print(f"Traditional ML model unavailable: {e}")
+            self.ml_pipeline = None
+
+    @staticmethod
+    def _read_label_mapping(path: Path) -> dict[str, str]:
+        with path.open(encoding='utf-8') as mapping_file:
+            payload = json.load(mapping_file)
+        mapping = payload.get('id_to_label')
+        if not isinstance(mapping, dict) or not mapping:
+            raise ValueError('label mapping must contain a non-empty id_to_label object')
+        return {str(class_id): str(label) for class_id, label in mapping.items()}
 
     def recognize(self, text: str) -> Dict[str, Any]:
         """Recognize intent from text"""
@@ -116,17 +144,18 @@ class IntentRecognizer:
                 predicted_class = torch.argmax(probabilities, dim=-1).item()
                 confidence = probabilities[0][predicted_class].item()
 
-            intent_id = list(self.intent_categories.keys())[predicted_class]
+            intent_id = resolve_intent_label(predicted_class, self.id_to_label)
+            probabilities_by_intent = {
+                resolve_intent_label(class_id, self.id_to_label): float(probability)
+                for class_id, probability in enumerate(probabilities[0].cpu().numpy())
+            }
 
             return {
                 'intent': intent_id,
-                'intent_name': self.intent_categories[intent_id],
+                'intent_name': self.intent_categories.get(intent_id, intent_id),
                 'confidence': float(confidence),
                 'method': 'deep_learning',
-                'all_probabilities': {
-                    intent: float(prob)
-                    for intent, prob in zip(self.intent_categories.keys(), probabilities[0].cpu().numpy())
-                }
+                'all_probabilities': probabilities_by_intent
             }
 
         except Exception as e:
@@ -137,28 +166,36 @@ class IntentRecognizer:
     def _predict_with_ml(self, text: str) -> Dict[str, Any]:
         """Predict using traditional ML"""
         try:
-            # Transform text
-            X = self.tfidf_vectorizer.transform([text])
+            if self.ml_pipeline is None:
+                raise RuntimeError('No trained traditional ML pipeline is available')
+            predicted_class = int(self.ml_pipeline.predict([text])[0])
+            decision_scores = np.asarray(self.ml_pipeline.decision_function([text]), dtype=float)
+            classes = np.asarray(self.ml_pipeline.named_steps['classifier'].classes_, dtype=int)
+            if decision_scores.ndim == 1:
+                if len(classes) != 2:
+                    raise ValueError('Unexpected decision score shape for the trained classifier')
+                decision_scores = np.array([-decision_scores[0], decision_scores[0]])
+            else:
+                decision_scores = decision_scores[0]
+            if len(decision_scores) != len(classes):
+                raise ValueError('Classifier scores do not match the trained class list')
 
-            # Predict
-            predicted_class = self.svm_classifier.predict(X)[0]
-            decision_scores = self.svm_classifier.decision_function(X)[0]
-
-            # Convert to probability-like scores
-            probabilities = np.exp(decision_scores) / np.sum(np.exp(decision_scores))
-            confidence = probabilities[predicted_class]
-
-            intent_id = list(self.intent_categories.keys())[predicted_class]
+            shifted_scores = decision_scores - np.max(decision_scores)
+            scores = np.exp(shifted_scores)
+            probabilities = scores / np.sum(scores)
+            intent_id = resolve_intent_label(predicted_class, self.ml_id_to_label)
+            confidence = float(probabilities[np.where(classes == predicted_class)[0][0]])
+            probabilities_by_intent = {
+                resolve_intent_label(class_id, self.ml_id_to_label): float(probability)
+                for class_id, probability in zip(classes, probabilities)
+            }
 
             return {
                 'intent': intent_id,
-                'intent_name': self.intent_categories[intent_id],
+                'intent_name': self.intent_categories.get(intent_id, intent_id),
                 'confidence': float(confidence),
                 'method': 'traditional_ml',
-                'all_probabilities': {
-                    intent: float(prob)
-                    for intent, prob in zip(self.intent_categories.keys(), probabilities)
-                }
+                'all_probabilities': probabilities_by_intent
             }
 
         except Exception as e:

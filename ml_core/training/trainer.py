@@ -9,13 +9,14 @@ from transformers import (
     AutoTokenizer, AutoModelForSequenceClassification,
     Trainer, TrainingArguments, DataCollatorWithPadding
 )
-from datasets import Dataset, DatasetDict
+from datasets import ClassLabel, Dataset, DatasetDict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import LinearSVC
 from sklearn.pipeline import Pipeline
 import logging
 
 from config.settings import settings
+from ml_core.label_mapping import build_label_mappings, validate_intent_training_data
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +49,15 @@ class ModelTrainer:
 
         try:
             # Prepare data
-            queries = training_data.get('queries', [])
-            intents = training_data.get('intents', [])
-
-            if not queries or not intents:
-                raise ValueError("No training data provided")
+            queries, intents = validate_intent_training_data(
+                training_data.get('queries', []),
+                training_data.get('intents', []),
+                validation_split,
+            )
 
             # Create label mapping
-            unique_intents = sorted(set(intents))
-            label_to_id = {label: i for i, label in enumerate(unique_intents)}
-            id_to_label = {i: label for label, i in label_to_id.items()}
+            label_to_id, id_to_label = build_label_mappings(intents)
+            unique_intents = list(label_to_id)
 
             # Convert labels to IDs
             label_ids = [label_to_id[intent] for intent in intents]
@@ -67,9 +67,14 @@ class ModelTrainer:
                 'text': queries,
                 'label': label_ids
             })
+            dataset = dataset.cast_column('label', ClassLabel(names=unique_intents))
 
-            # Split dataset
-            split_dataset = dataset.train_test_split(test_size=validation_split, seed=42)
+            # Keep every intent represented in both splits for comparable metrics.
+            split_dataset = dataset.train_test_split(
+                test_size=validation_split,
+                seed=42,
+                stratify_by_column='label',
+            )
 
             # Load tokenizer and model
             config = self.model_configs['intent_classifier']
@@ -78,6 +83,8 @@ class ModelTrainer:
                 config['base_model'],
                 num_labels=len(unique_intents)
             ).to(self.device)
+            model.config.label2id = label_to_id
+            model.config.id2label = {int(class_id): label for class_id, label in id_to_label.items()}
 
             # Tokenize dataset
             def tokenize_function(examples):
@@ -166,6 +173,8 @@ class ModelTrainer:
             ml_save_path = self.models_dir / "intent_classifier" / "ml_model"
             ml_save_path.mkdir(parents=True, exist_ok=True)
             joblib.dump(ml_model, ml_save_path / "ml_model.pkl")
+            with open(ml_save_path / "label_mappings.json", 'w', encoding='utf-8') as f:
+                json.dump(label_info, f, ensure_ascii=False, indent=2)
 
             # Prepare results
             results = {
