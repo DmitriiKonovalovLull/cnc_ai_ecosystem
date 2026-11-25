@@ -1,5 +1,13 @@
 # CNC AI Ecosystem
 
+**Отдельная разработка прекращена. Основной проект — [CNC Assistant](https://github.com/DmitriiKonovalovLull/cnc-assistant).**
+
+Базовая intent-классификация, контракты меток и исправленная span-level оценка NER собраны в [модуле cnc_ml](https://github.com/DmitriiKonovalovLull/cnc-assistant/tree/main/cnc_ml). Его обучение и CLI проверяются отдельными тестами.
+
+Это выборочный перенос: прежний API, Transformers, retrieval и Celery-эксперименты целиком не интегрированы. Их исходники сохранены здесь для истории. [Решения по объединению](https://github.com/DmitriiKonovalovLull/cnc-assistant/blob/main/docs/CNC_CONSOLIDATION.md).
+
+Ниже описана прежняя структура прототипа; новые изменения следует делать в основном проекте.
+
 Экспериментальный Python-бэкенд для помощника по ЧПУ. Здесь собраны API, загрузка справочных данных, поиск по базе знаний и обучение моделей для классификации запросов.
 
 ## Устройство
